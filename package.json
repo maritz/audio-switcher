@@ -1,6 +1,6 @@
 {
   "name": "@maritz/pulseaudio-output-switcher",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Hotkey binding to toggle between pulseaudio output devices.",
   "main": "index.js",
   "scripts": {
@@ -10,8 +10,7 @@
   "author": "Moritz Peters",
   "license": "MIT",
   "dependencies": {
-    "iohook": "^0.9.1",
-    "pactl": "^1.0.0"
+    "iohook": "^0.9.3"
   },
   "engines": {
     "node": ">10 <=12"
