@@ -15,4 +15,18 @@ small adaptations. For basic use cases changing the constants in index.ts should
 (don't forget to rebuild with `npm run build` afterwards!)
 
 At the time of writing this iohook (library used to hook into keyboard shortcuts) is not working with any newer node
-version than node v12.
+version than node v12.  
+And there it is also not really working, since the published node package seems to have been compiled for electron.  
+The only way to fix it currently seems to manually build iohook and then copy the resulting contents from
+`iohook/prebuilds/iohook-v0.9.1-node-v72-linux-x64.tar.gz` to `audio-switcher/node_modules/iohook/builds/`.
+
+## Install
+
+Copy the audio-switcher.service file to $HOME/.config/systemd/user/ and then run
+
+    systemctl --user enable audio-switcher.service
+
+and then start with
+
+    systemctl --user start audio-switcher.service
+
