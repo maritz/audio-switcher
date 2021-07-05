@@ -1,0 +1,12 @@
+[Unit]
+Description=PulseAudio Hotkey Switcher
+
+[Service]
+ExecStart=/home/$HOME/.nvm/versions/node/v12.22.1/bin/node /home/$HOME/dev/tools/audio-switcher/index.js
+WorkingDirectory=/home/$HOME/dev/tools/audio-switcher
+
+[Install]
+WantedBy=default.target
+
+[Service]
+ExecStartPre=/bin/sleep 30

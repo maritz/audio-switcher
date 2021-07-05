@@ -22,7 +22,11 @@ The only way to fix it currently seems to manually build iohook and then copy th
 
 ## Install
 
-Copy the audio-switcher.service file to $HOME/.config/systemd/user/ and then run
+Copy the audio-switcher.service.sample file to $HOME/.config/systemd/user/audio-switcher.service.
+
+Make adjustments in it based on your configuration (nvm location or system node, version, replace $HOME with actual home dir).
+
+And then run
 
     systemctl --user enable audio-switcher.service
 
