@@ -1,8 +1,6 @@
 import iohook from "iohook";
 import { exec as execCb } from "child_process";
 import { promisify } from "util";
-import pactl, { ISinkObject } from "pactl";
-import { time, timeEnd } from "console";
 
 const exec = promisify(execCb);
 
@@ -15,7 +13,7 @@ const VALID_OUTPUT_DESCRIPTIONS = [
 // After startup set this device as the output
 const BOOT_OUTPUT = VALID_OUTPUT_DESCRIPTIONS[1];
 // Wait this long (in s) before setting the boot output
-const BOOT_DELAY = 10;
+const BOOT_DELAY = 1;
 // Hotkey key code to use for toggling between outputs
 const HOTKEY_CODE = [29, 56, 22]; // ctrl+alt+u
 // Hotkey debugging can be used to figure out the key codes by pressing keys while the script is running and then
@@ -28,20 +26,60 @@ function setTimeoutAsync(time: number) {
   });
 }
 
-function getSinks() {
-  return pactl
-    .list("sinks")
-    .filter((sink): sink is ISinkObject => !!sink.hasOwnProperty("name"))
-    .map((sink, index) => ({
-      ...sink,
-      index,
-    }));
+interface ISinkObject {
+  name: string;
+  state: "IDLE" | "RUNNING";
+  description: string;
+  index: number;
 }
 
-function getValidSinks() {
-  return getSinks().filter((sink) =>
+function isValidState(input: string): input is 'IDLE'|'RUNNING' {
+  return input === 'IDLE' || input === 'RUNNING';
+}
+
+async function getSinks() {
+  const rawResult = await exec("pactl list sinks");
+  const filteredResult = rawResult.stdout
+    .trim()
+    .split("\n")
+    .reduce<Array<ISinkObject>>((accumulator, current) => {
+      const trimmed = current.trim();
+      const newIndexLine = current.match(/^Sink #([\d]+)$/);
+      const name = trimmed.match(/^Name (.+)$/);
+      const state = trimmed.match(/^State (.)$/);
+      const description = trimmed.match(/^Description: (.+)$/);
+      if (newIndexLine) {
+        accumulator.push({
+          index: parseInt(newIndexLine[1], 10),
+          name: "",
+          state: "IDLE",
+          description: ""
+        });
+      }
+      if (name) {
+        accumulator[accumulator.length - 1].name = name[1];
+      }
+      if (state) {
+        const stateValue = state[0];
+        if (!isValidState(stateValue)) {
+          throw new Error(`Unknown sink (index: ${accumulator[accumulator.length - 1].index}) state: ${state[1]}`)
+        }  
+        accumulator[accumulator.length - 1].state = stateValue;
+      }
+      if (description) {
+        accumulator[accumulator.length - 1].description = description[1];
+      }
+      return accumulator;
+    }, []);
+    return filteredResult;
+
+}
+
+async function getValidSinks() {
+  const sinks = (await getSinks()).filter((sink) =>
     VALID_OUTPUT_DESCRIPTIONS.includes(sink.description)
   );
+  return sinks;
 }
 
 interface ISinkInputObject {
@@ -53,7 +91,7 @@ interface ISinkInputObject {
 
 async function getSinkInputs() {
   const rawResult = await exec("pacmd list-sink-inputs");
-  return rawResult.stdout
+  const filteredResult = rawResult.stdout
     .trim()
     .split("\n")
     .reduce<Array<ISinkInputObject>>((accumulator, current) => {
@@ -81,6 +119,7 @@ async function getSinkInputs() {
       }
       return accumulator;
     }, []);
+    return filteredResult;
 }
 
 async function getPulseEffectSinkInput() {
@@ -97,7 +136,7 @@ async function getPulseEffectSinkInput() {
 }
 
 async function toggleOutput() {
-  const sinks = getValidSinks();
+  const sinks = await getValidSinks();
   const peSinkInput = await getPulseEffectSinkInput();
   const newSinkIndex = sinks.filter(
     (sink) => sink.index !== peSinkInput.sink
@@ -112,12 +151,13 @@ async function setOutputToIndex(index: number) {
   );
   // pacmd succeeds silently but prints an error to stdout when something goes wrong;
   if (result.stdout.length !== 0) {
+    console.error(`Failed command: pacmd move-sink-input ${peSinkInput.index} ${index}`)
     throw new Error(result.stdout);
   }
 }
 
 async function setBootOutput() {
-  const sinks = getValidSinks();
+  const sinks = await getValidSinks();
   const newSinkIndex = sinks.filter(
     (sink) => sink.description === BOOT_OUTPUT
   )[0].index;
@@ -136,7 +176,27 @@ async function main() {
   iohook.start(HOTKEY_DEBUG);
 
   await setTimeoutAsync(BOOT_DELAY * 1000);
-  await setBootOutput();
+
+  const maxTimeout = 15000;
+  let currentTimeout = 10000;
+  let tryBoot = true;
+  while (tryBoot) {
+    try {
+      await setBootOutput();
+      tryBoot = false;
+      console.info("Booted up successfully.");
+    } catch (e) {
+      if (currentTimeout < maxTimeout) {
+        currentTimeout += 1000;
+      }
+      console.warn(
+        "Failed boot, trying again in %ss.",
+        currentTimeout / 1000,
+        e
+      );
+      await setTimeoutAsync(currentTimeout);
+    }
+  }
 }
 
 main().then(
