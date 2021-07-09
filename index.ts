@@ -1,6 +1,8 @@
 import iohook from "iohook";
 import { exec as execCb } from "child_process";
 import { promisify } from "util";
+import { getValidSinks } from "./getSinks";
+import { getSinkInputs } from "./getSinkInputs";
 
 const exec = promisify(execCb);
 
@@ -26,118 +28,45 @@ function setTimeoutAsync(time: number) {
   });
 }
 
-interface ISinkObject {
-  name: string;
-  state: "IDLE" | "RUNNING";
-  description: string;
-  index: number;
-}
-
-function isValidState(input: string): input is 'IDLE'|'RUNNING' {
-  return input === 'IDLE' || input === 'RUNNING';
-}
-
-async function getSinks() {
-  const rawResult = await exec("pactl list sinks");
-  const filteredResult = rawResult.stdout
-    .trim()
-    .split("\n")
-    .reduce<Array<ISinkObject>>((accumulator, current) => {
-      const trimmed = current.trim();
-      const newIndexLine = current.match(/^Sink #([\d]+)$/);
-      const name = trimmed.match(/^Name (.+)$/);
-      const state = trimmed.match(/^State (.)$/);
-      const description = trimmed.match(/^Description: (.+)$/);
-      if (newIndexLine) {
-        accumulator.push({
-          index: parseInt(newIndexLine[1], 10),
-          name: "",
-          state: "IDLE",
-          description: ""
-        });
-      }
-      if (name) {
-        accumulator[accumulator.length - 1].name = name[1];
-      }
-      if (state) {
-        const stateValue = state[0];
-        if (!isValidState(stateValue)) {
-          throw new Error(`Unknown sink (index: ${accumulator[accumulator.length - 1].index}) state: ${state[1]}`)
-        }  
-        accumulator[accumulator.length - 1].state = stateValue;
-      }
-      if (description) {
-        accumulator[accumulator.length - 1].description = description[1];
-      }
-      return accumulator;
-    }, []);
-    return filteredResult;
-
-}
-
-async function getValidSinks() {
-  const sinks = (await getSinks()).filter((sink) =>
-    VALID_OUTPUT_DESCRIPTIONS.includes(sink.description)
-  );
-  return sinks;
-}
-
-interface ISinkInputObject {
-  index: number;
-  appName: string;
-  mediaName: string;
-  sink: number;
-}
-
-async function getSinkInputs() {
-  const rawResult = await exec("pacmd list-sink-inputs");
-  const filteredResult = rawResult.stdout
-    .trim()
-    .split("\n")
-    .reduce<Array<ISinkInputObject>>((accumulator, current) => {
-      const trimmed = current.trim();
-      const newIndexLine = trimmed.match(/^index: ([\d]+)$/);
-      const appName = trimmed.match(/^application\.name = "([^"]+)"$/);
-      const mediaName = trimmed.match(/^media\.name = "([^"]+)"$/);
-      const sink = trimmed.match(/^sink: ([\d]+)/);
-      if (newIndexLine) {
-        accumulator.push({
-          index: parseInt(newIndexLine[1], 10),
-          appName: "",
-          mediaName: "",
-          sink: -1,
-        });
-      }
-      if (appName) {
-        accumulator[accumulator.length - 1].appName = appName[1];
-      }
-      if (mediaName) {
-        accumulator[accumulator.length - 1].mediaName = mediaName[1];
-      }
-      if (sink) {
-        accumulator[accumulator.length - 1].sink = parseInt(sink[1], 10);
-      }
-      return accumulator;
-    }, []);
-    return filteredResult;
-}
-
-async function getPulseEffectSinkInput() {
+/**
+ * Retrieve the sink input that is functioning as the output for all pulseeffect pipes.
+ */
+async function getPulseEffectOutputSinkInput() {
   const allInputs = await getSinkInputs();
   const input = allInputs.find((input) => {
     return (
-      input.mediaName === "Playback Stream" && input.appName === "PulseEffects"
+      input.mediaName === "Playback Stream" &&
+      input.appName === "PulseEffects" &&
+      input.id === "com.github.wwmm.pulseeffects.sinkinputs"
     );
   });
   if (!input) {
-    throw new Error("PulseEffect sink input could not be found");
+    throw new Error("PulseEffect output sink input could not be found");
+  }
+  return input;
+}
+
+/**
+ * Retrieve the sink input that is functioning as the input for the pulseeffect mic pipe.
+ */
+async function getPulseEffectInputSinkInput() {
+  const allInputs = await getSinkInputs();
+  const input = allInputs.find((input) => {
+    return (
+      input.mediaName === "Playback Stream" &&
+      input.appName === "PulseEffects" &&
+      input.id === "com.github.wwmm.pulseeffects.sourceoutputs"
+    );
+  });
+  if (!input) {
+    throw new Error("PulseEffect input sink input could not be found");
   }
   return input;
 }
 
 async function toggleOutput() {
-  const sinks = await getValidSinks();
-  const peSinkInput = await getPulseEffectSinkInput();
+  const sinks = await getValidSinks(VALID_OUTPUT_DESCRIPTIONS);
+  const peSinkInput = await getPulseEffectOutputSinkInput();
   const newSinkIndex = sinks.filter(
     (sink) => sink.index !== peSinkInput.sink
   )[0].index; // this is lazy and only works for 2 outputs... good enough for me.
@@ -145,24 +74,49 @@ async function toggleOutput() {
 }
 
 async function setOutputToIndex(index: number) {
-  const peSinkInput = await getPulseEffectSinkInput();
+  const peSinkInput = await getPulseEffectOutputSinkInput();
   const result = await exec(
     `pacmd move-sink-input ${peSinkInput.index} ${index}`
   );
   // pacmd succeeds silently but prints an error to stdout when something goes wrong;
   if (result.stdout.length !== 0) {
-    console.error(`Failed command: pacmd move-sink-input ${peSinkInput.index} ${index}`)
+    console.error(
+      `Failed command: pacmd move-sink-input ${peSinkInput.index} ${index}`
+    );
     throw new Error(result.stdout);
   }
 }
 
 async function setBootOutput() {
-  const sinks = await getValidSinks();
+  const sinks = await getValidSinks(VALID_OUTPUT_DESCRIPTIONS);
   const newSinkIndex = sinks.filter(
     (sink) => sink.description === BOOT_OUTPUT
   )[0].index;
   return setOutputToIndex(newSinkIndex);
 }
+
+async function setInputOutputToIndex(index: number) {
+  const peSinkInput = await getPulseEffectInputSinkInput();
+  const result = await exec(
+    `pacmd move-sink-input ${peSinkInput.index} ${index}`
+  );
+  // pacmd succeeds silently but prints an error to stdout when something goes wrong;
+  if (result.stdout.length !== 0) {
+    console.error(
+      `Failed command: pacmd move-sink-input ${peSinkInput.index} ${index}`
+    );
+    throw new Error(result.stdout);
+  }
+}
+
+async function setMicPEInputOutputSinkInput() {
+  const PEInputOutputSinkInputDescription = "PulseEffects(mic)";
+  const sinks = await getValidSinks([PEInputOutputSinkInputDescription]);
+  return setInputOutputToIndex(sinks[0].index);
+}
+
+let outputSet = false;
+let inputSet = false;
 
 async function main() {
   iohook.registerShortcut(HOTKEY_CODE, async () => {
@@ -175,14 +129,27 @@ async function main() {
   });
   iohook.start(HOTKEY_DEBUG);
 
+  console.info("Hotkey set up.");
+
   await setTimeoutAsync(BOOT_DELAY * 1000);
 
   const maxTimeout = 15000;
-  let currentTimeout = 10000;
+  let currentTimeout = 2000;
   let tryBoot = true;
   while (tryBoot) {
     try {
-      await setBootOutput();
+      if (!outputSet) {
+        await setBootOutput();
+        outputSet = true;
+        console.info(
+          "Booted up output setting successfully. Trying input next."
+        );
+      }
+
+      if (!inputSet) {
+        await setMicPEInputOutputSinkInput();
+        inputSet = true;
+      }
       tryBoot = false;
       console.info("Booted up successfully.");
     } catch (e) {
