@@ -9,4 +9,5 @@ WorkingDirectory=/home/$HOME/dev/tools/audio-switcher
 WantedBy=default.target
 
 [Service]
+# Sleep for 30 seconds before starting to prevent weird behavior
 ExecStartPre=/bin/sleep 30
